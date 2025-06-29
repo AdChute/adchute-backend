@@ -7,10 +7,7 @@ const router = express.Router();
 
 router.get('/server', authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    const user = req.user; // User object is already loaded by auth middleware
 
     // Check subscription status
     const now = new Date();
