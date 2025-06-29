@@ -22,9 +22,27 @@ const User = mongoose.model('User', userSchema);
 
 // Connect to MongoDB with error handling
 if (MONGODB_URI) {
-  mongoose.connect(MONGODB_URI).catch(err => {
+  console.log('Connecting to MongoDB...');
+  mongoose.connect(MONGODB_URI)
+    .then(() => {
+      console.log('Connected to MongoDB successfully');
+    })
+    .catch(err => {
+      console.error('MongoDB connection error:', err);
+      process.exit(1);
+    });
+  
+  // Handle MongoDB connection events
+  mongoose.connection.on('error', (err) => {
     console.error('MongoDB connection error:', err);
-    process.exit(1);
+  });
+  
+  mongoose.connection.on('disconnected', () => {
+    console.log('MongoDB disconnected');
+  });
+  
+  mongoose.connection.on('reconnected', () => {
+    console.log('MongoDB reconnected');
   });
 } else {
   console.error('MONGODB_URI environment variable is required');
@@ -276,20 +294,37 @@ app.post('/api/dns/authorize', async (req, res) => {
 });
 
 // Start servers
+console.log('Starting DNS proxy server...');
+
+// Start Express server first
+const httpServer = app.listen(AUTH_PORT, '0.0.0.0', () => {
+  console.log(`Auth API Server listening on port ${AUTH_PORT}`);
+});
+
+// Start DNS server
 server.listen({
   udp: { port: DNS_PORT, address: '0.0.0.0' },
   tcp: { port: DNS_PORT, address: '0.0.0.0' }
 }, () => {
   console.log(`DNS Proxy Server listening on port ${DNS_PORT}`);
-});
-
-app.listen(AUTH_PORT, '0.0.0.0', () => {
-  console.log(`Auth API Server listening on port ${AUTH_PORT}`);
+  console.log('All servers started successfully');
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('Shutting down gracefully...');
-  server.close();
-  process.exit(0);
+  console.log('Received SIGTERM, shutting down gracefully...');
+  httpServer.close(() => {
+    console.log('HTTP server closed');
+    server.close();
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('Received SIGINT, shutting down gracefully...');
+  httpServer.close(() => {
+    console.log('HTTP server closed');
+    server.close();
+    process.exit(0);
+  });
 });
