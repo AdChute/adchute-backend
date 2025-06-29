@@ -4,8 +4,8 @@ services:
 - name: dns-proxy
   source_dir: /dns-proxy
   github:
-    repo: benmross/adchute-backend
-    branch: main
+    repo: Adchute/adchute-backend
+    branch: master
     deploy_on_push: true
   dockerfile_path: dns-proxy/Dockerfile
   instance_count: 1
