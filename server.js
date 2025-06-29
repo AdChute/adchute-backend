@@ -7,6 +7,7 @@ require('dotenv').config();
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/user');
 const dnsRoutes = require('./routes/dns');
+const adminRoutes = require('./routes/admin');
 const { apiLimiter, authLimiter, dnsLimiter, requireHTTPS } = require('./middleware/security');
 
 const app = express();
@@ -60,6 +61,7 @@ mongoose.connection.on('error', (err) => {
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/dns', dnsLimiter, dnsRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
