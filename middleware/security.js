@@ -149,6 +149,11 @@ const ipWhitelist = (whitelist = []) => {
 };
 
 const requireHTTPS = (req, res, next) => {
+  // Skip HTTPS requirement for health checks
+  if (req.path === '/api/health') {
+    return next();
+  }
+  
   if (process.env.NODE_ENV === 'production' && !req.secure && req.get('x-forwarded-proto') !== 'https') {
     return res.status(403).json({ 
       error: 'HTTPS required' 
