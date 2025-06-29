@@ -32,6 +32,16 @@ app.use(cors({
 }));
 
 app.set('trust proxy', 1);
+
+// Health check endpoint - before any middleware that could block it
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+  });
+});
+
 app.use(apiLimiter);
 
 app.use(express.json({ limit: '1mb' }));
@@ -50,14 +60,6 @@ mongoose.connection.on('error', (err) => {
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/dns', dnsLimiter, dnsRoutes);
-
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
-  });
-});
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
