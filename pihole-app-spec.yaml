@@ -1,0 +1,45 @@
+name: adchute-pihole
+region: nyc
+services:
+- name: pihole
+  source_dir: /
+  github:
+    repo: benmross/adchute-pihole
+    branch: main
+    deploy_on_push: true
+  image:
+    registry_type: DOCKER_HUB
+    repository: pihole/pihole
+    tag: latest
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-1gb
+  http_port: 80
+  internal_ports:
+  - 53
+  - 80
+  routes:
+  - path: /
+    preserve_path_prefix: true
+  envs:
+  - key: TZ
+    value: America/New_York
+  - key: WEBPASSWORD
+    value: ${PIHOLE_ADMIN_PASSWORD}
+    type: SECRET
+  - key: PIHOLE_DNS_
+    value: 8.8.8.8;8.8.4.4
+  - key: DNSMASQ_LISTENING
+    value: all
+  - key: PIHOLE_DOMAIN
+    value: pihole.adchute.internal
+  - key: VIRTUAL_HOST
+    value: pihole.adchute.org
+  - key: CORS_HOSTS
+    value: pihole.adchute.org
+  health_check:
+    http_path: /admin/
+    initial_delay_seconds: 60
+    period_seconds: 10
+    timeout_seconds: 5
+    failure_threshold: 3
+    success_threshold: 1
