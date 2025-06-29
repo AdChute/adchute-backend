@@ -9,23 +9,20 @@ router.get('/server', authenticateToken, async (req, res) => {
   try {
     const user = req.user; // User object is already loaded by auth middleware
 
-    // Check subscription status
-    const now = new Date();
-    let hasAccess = false;
+    // Check subscription status using model method
+    let hasAccess = user.isSubscriptionActive();
     let accessType = 'none';
 
-    if (user.subscriptionStatus === 'active' && user.subscriptionEndDate > now) {
-      hasAccess = true;
+    if (user.subscription_status === 'active') {
       accessType = 'subscription';
-    } else if (user.subscriptionStatus === 'trial' && user.trialEndDate > now) {
-      hasAccess = true;
+    } else if (user.subscription_status === 'trial' && user.trial_expires_at > new Date()) {
       accessType = 'trial';
     }
 
     if (!hasAccess) {
       return res.status(403).json({ 
         error: 'Access denied: Active subscription required',
-        subscriptionStatus: user.subscriptionStatus,
+        subscriptionStatus: user.subscription_status,
         hasAccess: false
       });
     }
@@ -43,8 +40,8 @@ router.get('/server', authenticateToken, async (req, res) => {
       user_config: {
         userId: user._id,
         accessType,
-        subscriptionEndDate: user.subscriptionEndDate,
-        trialEndDate: user.trialEndDate
+        subscription_status: user.subscription_status,
+        trial_expires_at: user.trial_expires_at
       },
       message: 'Authenticated DNS access configured'
     };
@@ -102,16 +99,13 @@ router.post('/validate-access', async (req, res) => {
       });
     }
 
-    // Check subscription status
-    const now = new Date();
-    let hasAccess = false;
+    // Check subscription status using model method
+    let hasAccess = user.isSubscriptionActive();
     let accessType = 'none';
 
-    if (user.subscriptionStatus === 'active' && user.subscriptionEndDate > now) {
-      hasAccess = true;
+    if (user.subscription_status === 'active') {
       accessType = 'subscription';
-    } else if (user.subscriptionStatus === 'trial' && user.trialEndDate > now) {
-      hasAccess = true;
+    } else if (user.subscription_status === 'trial' && user.trial_expires_at > new Date()) {
       accessType = 'trial';
     }
 
@@ -123,7 +117,7 @@ router.post('/validate-access', async (req, res) => {
       reason: hasAccess ? 'Access granted' : 'Subscription required',
       user_id: userId,
       access_type: accessType,
-      subscription_status: user.subscriptionStatus,
+      subscription_status: user.subscription_status,
       timestamp: new Date().toISOString()
     });
 
