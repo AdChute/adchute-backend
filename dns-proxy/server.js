@@ -20,8 +20,16 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// Connect to MongoDB
-mongoose.connect(MONGODB_URI);
+// Connect to MongoDB with error handling
+if (MONGODB_URI) {
+  mongoose.connect(MONGODB_URI).catch(err => {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+  });
+} else {
+  console.error('MONGODB_URI environment variable is required');
+  process.exit(1);
+}
 
 // In-memory cache for authorized users (TTL: 5 minutes)
 const authorizedUsers = new Map();
