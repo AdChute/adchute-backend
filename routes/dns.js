@@ -33,6 +33,7 @@ router.get('/server', authenticateToken, async (req, res) => {
       dns_server: {
         ip: process.env.DNS_PROXY_HOST || 'dns.adchute.org',
         subdomain: `user${user._id}.dns.adchute.org`,
+        vpn_ip: '167.99.24.225', // DigitalOcean IP for dns.adchute.org
         port: 53,
         region: 'nyc',
         status: 'active'
