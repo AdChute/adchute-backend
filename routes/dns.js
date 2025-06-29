@@ -5,62 +5,58 @@ const User = require('../models/User');
 
 const router = express.Router();
 
-router.get('/server', authenticateToken, requireActiveSubscription, async (req, res) => {
+router.get('/server', authenticateToken, async (req, res) => {
   try {
-    const user = req.user;
-
-    if (user.dns_server_assigned) {
-      const dnsServer = await DnsServer.findById(user.dns_server_assigned);
-      if (dnsServer && dnsServer.status === 'active') {
-        return res.json({
-          dns_server: {
-            ip: dnsServer.server_ip,
-            region: dnsServer.region,
-            status: dnsServer.status,
-            performance: dnsServer.performance_metrics
-          }
-        });
-      }
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
     }
 
-    const availableServer = await DnsServer.findOne({
-      status: 'active',
-      $expr: { $lt: ['$active_users', '$capacity'] }
-    }).sort({ active_users: 1 });
+    // Check subscription status
+    const now = new Date();
+    let hasAccess = false;
+    let accessType = 'none';
 
-    if (!availableServer) {
-      return res.status(503).json({ 
-        error: 'No DNS servers available at the moment. Please try again later.' 
+    if (user.subscriptionStatus === 'active' && user.subscriptionEndDate > now) {
+      hasAccess = true;
+      accessType = 'subscription';
+    } else if (user.subscriptionStatus === 'trial' && user.trialEndDate > now) {
+      hasAccess = true;
+      accessType = 'trial';
+    }
+
+    if (!hasAccess) {
+      return res.status(403).json({ 
+        error: 'Access denied: Active subscription required',
+        subscriptionStatus: user.subscriptionStatus,
+        hasAccess: false
       });
     }
 
-    if (user.dns_server_assigned) {
-      const oldServer = await DnsServer.findById(user.dns_server_assigned);
-      if (oldServer) {
-        oldServer.releaseUser();
-        await oldServer.save();
-      }
-    }
-
-    availableServer.assignUser();
-    await availableServer.save();
-
-    user.dns_server_assigned = availableServer._id;
-    await user.save();
-
-    res.json({
+    // For now, return the authenticated DNS proxy configuration
+    // In the future, this could load balance between multiple DNS servers
+    const dnsConfig = {
       dns_server: {
-        ip: availableServer.server_ip,
-        region: availableServer.region,
-        status: availableServer.status,
-        performance: availableServer.performance_metrics
+        ip: process.env.DNS_PROXY_HOST || 'dns.adchute.org',
+        subdomain: `user${user._id}.dns.adchute.org`,
+        port: 53,
+        region: 'nyc',
+        status: 'active'
       },
-      message: 'DNS server assigned successfully'
-    });
+      user_config: {
+        userId: user._id,
+        accessType,
+        subscriptionEndDate: user.subscriptionEndDate,
+        trialEndDate: user.trialEndDate
+      },
+      message: 'Authenticated DNS access configured'
+    };
+
+    res.json(dnsConfig);
 
   } catch (error) {
     console.error('Get DNS server error:', error);
-    res.status(500).json({ error: 'Failed to assign DNS server' });
+    res.status(500).json({ error: 'Failed to get DNS configuration' });
   }
 });
 
@@ -89,40 +85,48 @@ router.post('/release', authenticateToken, async (req, res) => {
   }
 });
 
-router.get('/validate-access', authenticateToken, async (req, res) => {
+// Validate access for DNS proxy (called without auth token, uses userId)
+router.post('/validate-access', async (req, res) => {
   try {
-    const user = req.user;
-    const { client_ip } = req.query;
+    const { userId, dnsQuery, clientIp } = req.body;
 
-    const isActive = user.isSubscriptionActive();
-    
-    if (!isActive) {
-      return res.status(403).json({ 
+    if (!userId) {
+      return res.json({ 
         allowed: false, 
-        reason: 'Subscription not active',
-        subscription_status: user.subscription_status
+        reason: 'User ID required' 
       });
     }
 
-    if (!user.dns_server_assigned) {
-      return res.status(403).json({ 
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.json({ 
         allowed: false, 
-        reason: 'No DNS server assigned' 
+        reason: 'User not found' 
       });
     }
 
-    const dnsServer = await DnsServer.findById(user.dns_server_assigned);
-    if (!dnsServer || dnsServer.status !== 'active') {
-      return res.status(503).json({ 
-        allowed: false, 
-        reason: 'Assigned DNS server not available' 
-      });
+    // Check subscription status
+    const now = new Date();
+    let hasAccess = false;
+    let accessType = 'none';
+
+    if (user.subscriptionStatus === 'active' && user.subscriptionEndDate > now) {
+      hasAccess = true;
+      accessType = 'subscription';
+    } else if (user.subscriptionStatus === 'trial' && user.trialEndDate > now) {
+      hasAccess = true;
+      accessType = 'trial';
     }
+
+    // Log the validation attempt for monitoring
+    console.log(`DNS access validation: User ${userId}, Query: ${dnsQuery}, Access: ${hasAccess}, Type: ${accessType}`);
 
     res.json({
-      allowed: true,
-      dns_server: dnsServer.server_ip,
-      user_id: user._id,
+      allowed: hasAccess,
+      reason: hasAccess ? 'Access granted' : 'Subscription required',
+      user_id: userId,
+      access_type: accessType,
+      subscription_status: user.subscriptionStatus,
       timestamp: new Date().toISOString()
     });
 

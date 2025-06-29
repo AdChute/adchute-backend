@@ -1,0 +1,287 @@
+const dns2 = require('dns2');
+const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
+require('dotenv').config();
+
+// Configuration
+const DNS_PORT = process.env.DNS_PORT || 53;
+const AUTH_PORT = process.env.AUTH_PORT || 8080;
+const PIHOLE_DNS = process.env.PIHOLE_DNS || '198.211.101.7';
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const MONGODB_URI = process.env.MONGODB_URI;
+
+// User schema for subscription validation
+const userSchema = new mongoose.Schema({
+  email: String,
+  subscriptionStatus: String,
+  subscriptionEndDate: Date,
+  trialEndDate: Date
+});
+
+const User = mongoose.model('User', userSchema);
+
+// Connect to MongoDB
+mongoose.connect(MONGODB_URI);
+
+// In-memory cache for authorized users (TTL: 5 minutes)
+const authorizedUsers = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// DNS query statistics
+const queryStats = new Map();
+
+/**
+ * Validate user subscription status
+ */
+async function validateUserSubscription(userId) {
+  try {
+    const user = await User.findById(userId);
+    if (!user) return false;
+
+    const now = new Date();
+    
+    // Check if user has active subscription
+    if (user.subscriptionStatus === 'active' && user.subscriptionEndDate > now) {
+      return true;
+    }
+    
+    // Check if user is in trial period
+    if (user.subscriptionStatus === 'trial' && user.trialEndDate > now) {
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('Error validating user subscription:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if user is authorized (with caching)
+ */
+async function isUserAuthorized(userId) {
+  const cached = authorizedUsers.get(userId);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.authorized;
+  }
+
+  const authorized = await validateUserSubscription(userId);
+  authorizedUsers.set(userId, {
+    authorized,
+    expiry: Date.now() + CACHE_TTL
+  });
+
+  return authorized;
+}
+
+/**
+ * Extract user ID from DNS query
+ * We'll use a custom header or subdomain approach
+ */
+function extractUserFromQuery(query) {
+  // Method 1: Subdomain approach - user123.dns.adchute.org
+  const domain = query.questions?.[0]?.name || '';
+  const userMatch = domain.match(/^user(\w+)\.dns\.adchute\.org$/);
+  if (userMatch) {
+    return userMatch[1];
+  }
+
+  // Method 2: TXT record approach for authentication
+  if (query.questions?.[0]?.type === dns2.Packet.TYPE.TXT && 
+      domain.startsWith('auth.')) {
+    const authDomain = domain.replace('auth.', '');
+    const userMatch = authDomain.match(/^user(\w+)\.dns\.adchute\.org$/);
+    if (userMatch) {
+      return userMatch[1];
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Forward DNS query to PiHole
+ */
+async function forwardToUpstream(query) {
+  return new Promise((resolve, reject) => {
+    const client = new dns2({
+      nameServers: [PIHOLE_DNS],
+      timeout: 5000
+    });
+
+    client.resolveA(query.questions[0].name, (err, result) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(result);
+      }
+    });
+  });
+}
+
+/**
+ * Create DNS server
+ */
+const server = dns2.createServer({
+  udp: true,
+  tcp: true,
+  handle: async (request, send, rinfo) => {
+    const query = request;
+    const clientIP = rinfo.address;
+    
+    console.log(`DNS Query from ${clientIP}: ${query.questions?.[0]?.name}`);
+
+    try {
+      // Extract user ID from query
+      const userId = extractUserFromQuery(query);
+      
+      if (!userId) {
+        console.log(`Unauthorized DNS query from ${clientIP}: No user ID found`);
+        // Send NXDOMAIN response for unauthorized queries
+        const response = dns2.Packet.createResponseFromRequest(request);
+        response.header.rcode = dns2.Packet.RCODE.NXDOMAIN;
+        return send(response);
+      }
+
+      // Check if user is authorized
+      const authorized = await isUserAuthorized(userId);
+      
+      if (!authorized) {
+        console.log(`Unauthorized DNS query from ${clientIP}: User ${userId} not authorized`);
+        // Send NXDOMAIN for unauthorized users
+        const response = dns2.Packet.createResponseFromRequest(request);
+        response.header.rcode = dns2.Packet.RCODE.NXDOMAIN;
+        return send(response);
+      }
+
+      // Update query statistics
+      const stats = queryStats.get(userId) || { count: 0, lastQuery: null };
+      stats.count++;
+      stats.lastQuery = new Date();
+      queryStats.set(userId, stats);
+
+      // Forward to PiHole - create upstream client
+      const upstream = new dns2({
+        nameServers: [PIHOLE_DNS],
+        timeout: 5000
+      });
+
+      // Forward the original query to PiHole
+      upstream.query(query.questions[0].name, query.questions[0].type)
+        .then(result => {
+          console.log(`Forwarded query for user ${userId}: ${query.questions[0].name}`);
+          
+          // Create response from upstream result
+          const response = dns2.Packet.createResponseFromRequest(request);
+          response.answers = result.answers;
+          response.authorities = result.authorities;
+          response.additionals = result.additionals;
+          
+          send(response);
+        })
+        .catch(error => {
+          console.error(`Error forwarding query for user ${userId}:`, error);
+          const response = dns2.Packet.createResponseFromRequest(request);
+          response.header.rcode = dns2.Packet.RCODE.SERVFAIL;
+          send(response);
+        });
+
+    } catch (error) {
+      console.error('DNS Server Error:', error);
+      const response = dns2.Packet.createResponseFromRequest(request);
+      response.header.rcode = dns2.Packet.RCODE.SERVFAIL;
+      send(response);
+    }
+  }
+});
+
+/**
+ * Express server for authentication and management
+ */
+const express = require('express');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Get user's DNS subdomain
+app.get('/api/dns/subdomain/:userId', async (req, res) => {
+  const { userId } = req.params;
+  
+  try {
+    const authorized = await isUserAuthorized(userId);
+    if (!authorized) {
+      return res.status(403).json({ error: 'User not authorized' });
+    }
+
+    res.json({
+      subdomain: `user${userId}.dns.adchute.org`,
+      dnsServer: process.env.DNS_PROXY_HOST || '198.211.101.7',
+      instructions: 'Use this subdomain as your DNS server'
+    });
+  } catch (error) {
+    console.error('Error getting DNS subdomain:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get user's query statistics
+app.get('/api/dns/stats/:userId', (req, res) => {
+  const { userId } = req.params;
+  const stats = queryStats.get(userId) || { count: 0, lastQuery: null };
+  
+  res.json({
+    userId,
+    queryCount: stats.count,
+    lastQuery: stats.lastQuery,
+    authorized: authorizedUsers.get(userId)?.authorized || false
+  });
+});
+
+// Validate JWT token and return user info for DNS access
+app.post('/api/dns/authorize', async (req, res) => {
+  const { token } = req.body;
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const userId = decoded.userId;
+    
+    const authorized = await isUserAuthorized(userId);
+    
+    res.json({
+      userId,
+      authorized,
+      subdomain: authorized ? `user${userId}.dns.adchute.org` : null,
+      dnsServer: authorized ? process.env.DNS_PROXY_HOST : null
+    });
+  } catch (error) {
+    console.error('Token validation error:', error);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+// Start servers
+server.listen({
+  udp: { port: DNS_PORT, address: '0.0.0.0' },
+  tcp: { port: DNS_PORT, address: '0.0.0.0' }
+}, () => {
+  console.log(`DNS Proxy Server listening on port ${DNS_PORT}`);
+});
+
+app.listen(AUTH_PORT, '0.0.0.0', () => {
+  console.log(`Auth API Server listening on port ${AUTH_PORT}`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('Shutting down gracefully...');
+  server.close();
+  process.exit(0);
+});

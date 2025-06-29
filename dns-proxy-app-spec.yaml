@@ -1,0 +1,45 @@
+name: adchute-dns-proxy
+region: nyc
+services:
+- name: dns-proxy
+  source_dir: /dns-proxy
+  github:
+    repo: benmross/adchute-backend
+    branch: main
+    deploy_on_push: true
+  dockerfile_path: dns-proxy/Dockerfile
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-1gb
+  http_port: 8080
+  internal_ports:
+  - 53
+  - 8080
+  routes:
+  - path: /
+    preserve_path_prefix: true
+  envs:
+  - key: DNS_PORT
+    value: "53"
+  - key: AUTH_PORT
+    value: "8080"
+  - key: PIHOLE_DNS
+    value: "198.211.101.7"
+  - key: DNS_PROXY_HOST
+    value: "dns.adchute.org"
+  - key: JWT_SECRET
+    value: ${JWT_SECRET}
+    type: SECRET
+  - key: MONGODB_URI
+    value: ${MONGODB_URI}
+    type: SECRET
+  - key: MAX_QUERIES_PER_MINUTE
+    value: "60"
+  - key: CACHE_TTL_MINUTES
+    value: "5"
+  health_check:
+    http_path: /health
+    initial_delay_seconds: 30
+    period_seconds: 10
+    timeout_seconds: 5
+    failure_threshold: 3
+    success_threshold: 1
