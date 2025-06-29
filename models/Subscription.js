@@ -8,8 +8,7 @@ const subscriptionSchema = new mongoose.Schema({
   },
   stripe_subscription_id: {
     type: String,
-    required: true,
-    unique: true
+    required: true
   },
   stripe_customer_id: {
     type: String,
@@ -54,7 +53,7 @@ const subscriptionSchema = new mongoose.Schema({
 });
 
 subscriptionSchema.index({ user_id: 1 });
-subscriptionSchema.index({ stripe_subscription_id: 1 });
+subscriptionSchema.index({ stripe_subscription_id: 1 }, { unique: true });
 subscriptionSchema.index({ status: 1 });
 
 subscriptionSchema.methods.isActive = function() {
