@@ -33,7 +33,7 @@ router.get('/server', authenticateToken, async (req, res) => {
       dns_server: {
         ip: process.env.DNS_PROXY_HOST || 'dns.adchute.org',
         subdomain: `user${user._id}.dns.adchute.org`,
-        vpn_ip: '1.1.1.1', // Cloudflare DNS for testing VPN connectivity
+        vpn_ip: '167.99.24.225', // AdChute DNS proxy IP for VPN
         port: 53,
         region: 'nyc',
         status: 'active'
