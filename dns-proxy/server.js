@@ -10,12 +10,12 @@ const PIHOLE_DNS = process.env.PIHOLE_DNS || '198.211.101.7';
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const MONGODB_URI = process.env.MONGODB_URI;
 
-// User schema for subscription validation
+// User schema for subscription validation (matching main API schema)
 const userSchema = new mongoose.Schema({
   email: String,
-  subscriptionStatus: String,
-  subscriptionEndDate: Date,
-  trialEndDate: Date
+  subscription_status: String,
+  subscription_end_date: Date,
+  trial_expires_at: Date
 });
 
 const User = mongoose.model('User', userSchema);
@@ -62,20 +62,27 @@ const queryStats = new Map();
 async function validateUserSubscription(userId) {
   try {
     const user = await User.findById(userId);
-    if (!user) return false;
+    if (!user) {
+      console.log(`User not found: ${userId}`);
+      return false;
+    }
 
     const now = new Date();
+    console.log(`Validating user ${userId}: status=${user.subscription_status}, trial_expires=${user.trial_expires_at}`);
     
     // Check if user has active subscription
-    if (user.subscriptionStatus === 'active' && user.subscriptionEndDate > now) {
+    if (user.subscription_status === 'active' && user.subscription_end_date > now) {
+      console.log(`User ${userId} has active subscription`);
       return true;
     }
     
     // Check if user is in trial period
-    if (user.subscriptionStatus === 'trial' && user.trialEndDate > now) {
+    if (user.subscription_status === 'trial' && user.trial_expires_at > now) {
+      console.log(`User ${userId} has valid trial`);
       return true;
     }
     
+    console.log(`User ${userId} subscription expired or invalid`);
     return false;
   } catch (error) {
     console.error('Error validating user subscription:', error);
