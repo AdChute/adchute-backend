@@ -293,6 +293,152 @@ app.post('/api/dns/authorize', async (req, res) => {
   }
 });
 
+// DNS over HTTPS endpoint (RFC 8484)
+app.get('/dns-query', async (req, res) => {
+  const dnsParam = req.query.dns;
+  
+  if (!dnsParam) {
+    return res.status(400).json({ error: 'Missing dns parameter' });
+  }
+  
+  try {
+    // Extract user ID from the Host header (e.g., user123.dns.adchute.org)
+    const host = req.get('Host') || '';
+    const userMatch = host.match(/^user(\w+)\.dns\.adchute\.org/);
+    
+    if (!userMatch) {
+      return res.status(400).json({ error: 'Invalid subdomain format' });
+    }
+    
+    const userId = userMatch[1];
+    const authorized = await isUserAuthorized(userId);
+    
+    if (!authorized) {
+      return res.status(403).json({ error: 'User not authorized' });
+    }
+    
+    // Decode base64 DNS query
+    const dnsQuery = Buffer.from(dnsParam, 'base64url');
+    
+    // Parse DNS query using dns2
+    const query = dns2.Packet.parse(dnsQuery);
+    
+    // Update query statistics
+    const stats = queryStats.get(userId) || { count: 0, lastQuery: null };
+    stats.count++;
+    stats.lastQuery = new Date().toISOString();
+    queryStats.set(userId, stats);
+    
+    console.log(`DoH DNS Query from user ${userId}:`, 
+      query.questions?.[0]?.name || 'unknown',
+      query.questions?.[0]?.type || 'unknown'
+    );
+    
+    // Forward to Pi-hole DNS server
+    const response = await new Promise((resolve, reject) => {
+      const client = dns2.createUDPSocket();
+      
+      // Set timeout
+      const timeout = setTimeout(() => {
+        client.close();
+        reject(new Error('DNS query timeout'));
+      }, 5000);
+      
+      client.on('response', (response) => {
+        clearTimeout(timeout);
+        client.close();
+        resolve(response);
+      });
+      
+      client.on('error', (error) => {
+        clearTimeout(timeout);
+        client.close();
+        reject(error);
+      });
+      
+      // Send query to Pi-hole
+      client.send(query, 53, PIHOLE_DNS);
+    });
+    
+    // Return DNS response as binary data with proper headers
+    res.set('Content-Type', 'application/dns-message');
+    res.set('Cache-Control', 'max-age=300'); // Cache for 5 minutes
+    res.send(response.toBuffer());
+    
+  } catch (error) {
+    console.error('DoH DNS query error:', error);
+    res.status(500).json({ error: 'DNS query failed' });
+  }
+});
+
+app.post('/dns-query', async (req, res) => {
+  // POST version of DNS over HTTPS
+  try {
+    // Extract user ID from the Host header
+    const host = req.get('Host') || '';
+    const userMatch = host.match(/^user(\w+)\.dns\.adchute\.org/);
+    
+    if (!userMatch) {
+      return res.status(400).json({ error: 'Invalid subdomain format' });
+    }
+    
+    const userId = userMatch[1];
+    const authorized = await isUserAuthorized(userId);
+    
+    if (!authorized) {
+      return res.status(403).json({ error: 'User not authorized' });
+    }
+    
+    // Parse DNS query from request body
+    const dnsQuery = req.body;
+    const query = dns2.Packet.parse(dnsQuery);
+    
+    // Update query statistics
+    const stats = queryStats.get(userId) || { count: 0, lastQuery: null };
+    stats.count++;
+    stats.lastQuery = new Date().toISOString();
+    queryStats.set(userId, stats);
+    
+    console.log(`DoH POST DNS Query from user ${userId}:`, 
+      query.questions?.[0]?.name || 'unknown',
+      query.questions?.[0]?.type || 'unknown'
+    );
+    
+    // Forward to Pi-hole DNS server
+    const response = await new Promise((resolve, reject) => {
+      const client = dns2.createUDPSocket();
+      
+      const timeout = setTimeout(() => {
+        client.close();
+        reject(new Error('DNS query timeout'));
+      }, 5000);
+      
+      client.on('response', (response) => {
+        clearTimeout(timeout);
+        client.close();
+        resolve(response);
+      });
+      
+      client.on('error', (error) => {
+        clearTimeout(timeout);
+        client.close();
+        reject(error);
+      });
+      
+      client.send(query, 53, PIHOLE_DNS);
+    });
+    
+    // Return DNS response
+    res.set('Content-Type', 'application/dns-message');
+    res.set('Cache-Control', 'max-age=300');
+    res.send(response.toBuffer());
+    
+  } catch (error) {
+    console.error('DoH POST DNS query error:', error);
+    res.status(500).json({ error: 'DNS query failed' });
+  }
+});
+
 // Start servers
 console.log('Starting DNS proxy server...');
 
