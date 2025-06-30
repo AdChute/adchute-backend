@@ -303,21 +303,18 @@ app.post('/api/dns/authorize', async (req, res) => {
 // DNS over HTTPS endpoint (RFC 8484)
 app.get('/dns-query', async (req, res) => {
   const dnsParam = req.query.dns;
+  const userParam = req.query.user;
   
   if (!dnsParam) {
     return res.status(400).json({ error: 'Missing dns parameter' });
   }
   
+  if (!userParam) {
+    return res.status(400).json({ error: 'Missing user parameter' });
+  }
+  
   try {
-    // Extract user ID from the Host header (e.g., user123.dns.adchute.org)
-    const host = req.get('Host') || '';
-    const userMatch = host.match(/^user(\w+)\.dns\.adchute\.org/);
-    
-    if (!userMatch) {
-      return res.status(400).json({ error: 'Invalid subdomain format' });
-    }
-    
-    const userId = userMatch[1];
+    const userId = userParam;
     const authorized = await isUserAuthorized(userId);
     
     if (!authorized) {
@@ -380,16 +377,14 @@ app.get('/dns-query', async (req, res) => {
 
 app.post('/dns-query', async (req, res) => {
   // POST version of DNS over HTTPS
+  const userParam = req.query.user;
+  
+  if (!userParam) {
+    return res.status(400).json({ error: 'Missing user parameter' });
+  }
+  
   try {
-    // Extract user ID from the Host header
-    const host = req.get('Host') || '';
-    const userMatch = host.match(/^user(\w+)\.dns\.adchute\.org/);
-    
-    if (!userMatch) {
-      return res.status(400).json({ error: 'Invalid subdomain format' });
-    }
-    
-    const userId = userMatch[1];
+    const userId = userParam;
     const authorized = await isUserAuthorized(userId);
     
     if (!authorized) {
